@@ -1,0 +1,237 @@
+const axios = require('axios');
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+const FormData = require('form-data');
+const { BlobServiceClient } = require('@azure/storage-blob');
+const { DefaultAzureCredential } = require('@azure/identity');
+const { SecretClient } = require('@azure/keyvault-secrets'); // Corrected import
+
+
+// Helper function for stream to buffer conversion for blob download
+async function streamToBuffer(readableStream, context) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        readableStream.on('data', (data) => {
+            chunks.push(data instanceof Buffer ? data : Buffer.from(data));
+        });
+        readableStream.on('end', () => {
+            resolve(Buffer.concat(chunks));
+        });
+        readableStream.on('error', (error) => {
+            context.log.error('Error in stream to buffer conversion:', error);
+            reject(error);
+        });
+    });
+}
+
+module.exports = async function (context) {
+    context.log('Function execution started.');
+    const KVUri = process.env['KEYVAULT_URI'];
+    const credential = new DefaultAzureCredential();
+    const secretClient = new SecretClient(KVUri, credential);
+    const blobServiceClient = BlobServiceClient.fromConnectionString(process.env['AzureWebJobsStorage']);
+    const containerName = 'airlock-otp-data';
+    const blobName = 'otps.json';
+
+    let AIRLOCK_API_KEY, JIRA_API_TOKEN;
+
+    try {
+        // Retrieve the API key from Azure Key Vault
+        const airlockSecret = await secretClient.getSecret('APIKEY1');
+        AIRLOCK_API_KEY = airlockSecret.value;
+
+        // Fetch the JIRA API token from Key Vault
+        const jiraApiTokenSecret = await secretClient.getSecret('JiraApiToken');
+        JIRA_API_TOKEN = jiraApiTokenSecret.value;
+
+        // Fetch current OTPs and previous OTPs from blob storage
+        const currentOtps = await fetchCurrentOtps(AIRLOCK_API_KEY, context);
+        const previousOtps = await downloadPreviousOtpsFromBlob(blobServiceClient, containerName, blobName, context);
+        let allActivities = []; // Array to hold all activity data for Excel generation
+
+        // Logic to identify new or updated OTPs with status 2
+        const updatedOtps = currentOtps.filter(otp => otp.status === '2' && !previousOtps.find(prevOtp => prevOtp.otpid === otp.otpid));
+        for (const otp of updatedOtps) {
+            const activities = await fetchOtpActivities(AIRLOCK_API_KEY, otp.otpid, context);
+            const hashes = activities.map(activity => activity.sha256);
+            const hashWhitelistStatus = await checkHashes(AIRLOCK_API_KEY, hashes, context);
+            activities.forEach(activity => {
+                const isWhitelisted = hashWhitelistStatus[activity.sha256] ? 'Yes' : 'No';
+                allActivities.push({
+                    filename: activity.filename,
+                    publisher: activity.publisher,
+                    sha256: activity.sha256,
+                    createtime: activity.createtime,
+                    whitelisted: isWhitelisted
+                });
+            });
+        }
+
+        // Generate Excel after processing all OTPs
+        const excelFilePath = await generateExcel(allActivities, context);
+        context.log('Excel workbook generated.');
+
+        // Update the blob storage with the current list of OTPs
+        await uploadOtpsToBlob(blobServiceClient, containerName, blobName, currentOtps, context);
+        context.log('Updated OTPs processed and blob storage updated.');
+
+        // Create a Jira issue and attach the Excel file
+        await createAndAttachJiraIssue(excelFilePath, context, JIRA_API_TOKEN);
+    } catch (error) {
+        context.log.error('An error occurred:', error);
+    }
+};
+
+// Define other necessary functions such as fetchCurrentOtps, downloadPreviousOtpsFromBlob, uploadOtpsToBlob, fetchOtpActivities, checkHashes
+
+async function fetchCurrentOtps(apiKey, context) {
+    try {
+        const response = await axios.post('https://ic1385.ci.managedwhitelisting.com:3129/v1/otp/usage', {}, {
+            headers: { 'X-APIKey': apiKey, 'Content-Type': 'application/json' }
+        });
+        if (response.status === 200) {
+            context.log('Successfully fetched current OTPs:', response.data);
+            return response.data.response.otpusage;
+        } else {
+            context.log.error('Failed to fetch current OTPs with status:', response.status);
+            return []; // Return an empty array or handle as needed
+        }
+    } catch (error) {
+        context.log.error('Error fetching current OTPs:', error);
+        throw error;
+    }
+}
+async function downloadPreviousOtpsFromBlob(blobServiceClient, containerName, blobName, context) {
+    try {
+        const containerClient = blobServiceClient.getContainerClient(containerName);
+        const blobClient = containerClient.getBlobClient(blobName);
+        const downloadBlockBlobResponse = await blobClient.download(0);
+        const previousOtps = await streamToBuffer(downloadBlockBlobResponse.readableStreamBody, context);
+        context.log('Previous OTPs downloaded successfully.');
+        return JSON.parse(previousOtps.toString());
+    } catch (error) {
+        context.log.error('Error downloading previous OTPs from Blob:', error);
+        throw error;
+    }
+}
+async function uploadOtpsToBlob(blobServiceClient, containerName, blobName, otps, context) {
+    try {
+        const containerClient = blobServiceClient.getContainerClient(containerName);
+        const blobClient = containerClient.getBlockBlobClient(blobName);
+        const otpsData = JSON.stringify(otps);
+        await blobClient.upload(otpsData, otpsData.length, {
+            blobHTTPHeaders: { blobContentType: 'application/json' }
+        });
+        context.log('OTPs uploaded to blob storage successfully.');
+    } catch (error) {
+        context.log.error('Error uploading OTPs to Blob:', error);
+        throw error;
+    }
+}
+async function fetchOtpActivities(apiKey, otpid, context) {
+    try {
+        const response = await axios.post('https://ic1385.ci.managedwhitelisting.com:3129/v1/otp/activities', { otpid: otpid }, {
+            headers: { 'X-APIKey': apiKey, 'Content-Type': 'application/json' }
+        });
+        if (response.status === 200) {
+            context.log('Successfully fetched OTP activities:', response.data);
+            return response.data.response.otpactivities;
+        } else {
+            context.log.error('Failed to fetch OTP activities with status:', response.status);
+            return []; // Return an empty array or handle as needed
+        }
+    } catch (error) {
+        context.log.error('Error fetching OTP activities:', error);
+        throw error;
+    }
+}
+async function checkHashes(apiKey, hashes, context) {
+    try {
+        const response = await axios.post('https://ic1385.ci.managedwhitelisting.com:3129/v1/hash/query', { hashes }, {
+            headers: { 'X-APIKey': apiKey, 'Content-Type': 'application/json' }
+        });
+        if (response.status === 200) {
+            context.log('Successfully checked hashes:', response.data);
+            // Assuming 'results' contains the array of hash statuses we're interested in.
+            const results = response.data.response.results; // Adjusted from response.data.hashes
+            const hashStatuses = hashes.reduce((acc, hash) => {
+                // Check if hash is included in the results array (assuming each result item has a 'hash' property)
+                const isHashIncluded = results.some(result => result.hash === hash);
+                acc[hash] = isHashIncluded;
+                return acc;
+            }, {});
+            return hashStatuses;
+        } else {
+            context.log.error('Failed to check hashes with status:', response.status);
+            return {}; // Return an empty object or handle as needed
+        }
+    } catch (error) {
+        context.log.error('Error checking hashes:', error);
+        throw error;
+    }
+}
+
+
+async function generateExcel(allActivities, context) {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('OTP Activities');
+    worksheet.columns = [
+        { header: 'Filename', key: 'filename', width: 30 },
+        { header: 'Publisher', key: 'publisher', width: 25 },
+        { header: 'SHA256', key: 'sha256', width: 45 },
+        { header: 'CreateTime', key: 'createtime', width: 20 },
+        { header: 'Whitelisted', key: 'whitelisted', width: 10 },
+    ];
+    allActivities.forEach(activity => {
+        worksheet.addRow(activity);
+    });
+    const excelFilePath = './OTPActivities.xlsx';
+    await workbook.xlsx.writeFile(excelFilePath);
+    return excelFilePath;
+}
+
+async function createAndAttachJiraIssue(excelFilePath, context, JIRA_API_TOKEN) {
+    const issueData = {
+        fields: {
+            project: { key: "ICARE" },
+            summary: "OTP Activities Report",
+            description: {
+                type: "doc",
+                version: 1,
+                content: [{
+                    type: "paragraph",
+                    content: [{ text: "An Excel report of OTP activities has been generated and attached.", type: "text" }]
+                }]
+            },
+            issuetype: { id: "10003" },
+            labels: ["ICARE-AIRLOCK"]
+        }
+    };
+
+    try {
+        const jiraResponse = await axios.post('https://cso-group.atlassian.net/rest/api/3/issue/', issueData, {
+            headers: {
+                'Authorization': `Basic ${Buffer.from(`${process.env['JIRA_EMAIL']}:${JIRA_API_TOKEN}`).toString('base64')}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        context.log('JIRA issue created successfully:', jiraResponse.data);
+
+        const issueKey = jiraResponse.data.key;
+        const formData = new FormData();
+        formData.append('file', fs.createReadStream(excelFilePath), {
+            filename: 'OTPActivities.xlsx'
+        });
+
+        const attachmentResponse = await axios.post(`https://cso-group.atlassian.net/rest/api/3/issue/${issueKey}/attachments`, formData, {
+            headers: {
+                ...formData.getHeaders(),
+                'Authorization': `Basic ${Buffer.from(`${process.env['JIRA_EMAIL']}:${JIRA_API_TOKEN}`).toString('base64')}`,
+                'X-Atlassian-Token': 'no-check'
+            }
+        });
+        context.log('Excel file attached to JIRA issue successfully');
+    } catch (error) {
+        context.log.error('Error interacting with JIRA:', error);
+    }
+}
