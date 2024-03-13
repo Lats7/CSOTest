@@ -18,26 +18,22 @@ jobs:
         with:
           node-version: '18.x'
 
-      - name: Install Dependencies
+      - name: Install Global Dependencies
         run: |
-          cd Tenable/TenableFunction
+          cd Tenable
           npm install
 
-      - name: Build Project (if applicable)
+      - name: Prepare Deployment Package
         run: |
-          cd Tenable/TenableFunction
           npm run build --if-present
-
-      - name: Run Tests (if applicable)
-        run: |
-          cd Tenable/TenableFunction
           npm run test --if-present
+        working-directory: Tenable
 
       - name: Upload Artifact for Deployment
         uses: actions/upload-artifact@v3
         with:
           name: node-app
-          path: Tenable/TenableFunction
+          path: Tenable
 
   deploy:
     runs-on: windows-latest
@@ -58,4 +54,4 @@ jobs:
         with:
           app-name: 'ProdTenableDCJFunction'
           slot-name: 'Production'
-          package: . # Assumes the working directory contains your function app
+          package: .
