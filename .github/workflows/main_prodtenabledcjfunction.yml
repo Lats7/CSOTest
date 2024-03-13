@@ -6,10 +6,6 @@ on:
       - main
   workflow_dispatch:
 
-env:
-  AZURE_FUNCTIONAPP_PACKAGE_PATH: '.' # Assuming your project root contains all necessary files for deployment
-  NODE_VERSION: '18.x' # Ensure this matches the version used in your project
-
 jobs:
   build:
     runs-on: windows-latest
@@ -17,14 +13,19 @@ jobs:
       - name: 'Checkout GitHub Action'
         uses: actions/checkout@v4
 
-      - name: Setup Node.js environment
+      - name: Setup Node Environment
         uses: actions/setup-node@v3
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '18.x' # Ensure this matches the version used in your project
 
-      - name: Install dependencies and build project
+      - name: Install Dependencies
         run: |
+          cd Tenable/TenableFunction
           npm install
+
+      - name: Build and Test (if applicable)
+        run: |
+          cd Tenable/TenableFunction
           npm run build --if-present
           npm run test --if-present
         shell: pwsh
@@ -33,7 +34,7 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: node-app
-          path: .
+          path: Tenable/TenableFunction
 
   deploy:
     runs-on: windows-latest
@@ -44,7 +45,7 @@ jobs:
         with:
           name: node-app
 
-      - name: Login to Azure using consolidated credentials
+      - name: Login to Azure
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
@@ -54,4 +55,4 @@ jobs:
         with:
           app-name: 'ProdTenableDCJFunction'
           slot-name: 'Production'
-          package: . # This assumes the current working directory contains the function app to deploy
+          package: . # Assuming the current working directory is correct after artifact download
