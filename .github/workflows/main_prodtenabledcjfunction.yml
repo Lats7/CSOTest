@@ -54,4 +54,4 @@ jobs:
           app-name: ${{ env.FUNCTION_APP_NAME }} # Using the Azure Function App name from the environment variable
           slot-name: 'Production'
           package: '.' # Specifies to deploy the content of the downloaded artifact
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_92F8F14D0
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_92F8F14D0BC64E7AAE2F5DCF4CCF1C4B }}
