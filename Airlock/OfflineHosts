@@ -1,0 +1,185 @@
+const axios = require('axios');
+const ExcelJS = require('exceljs');
+const fs = require('fs');
+const FormData = require('form-data');
+const { BlobServiceClient } = require('@azure/storage-blob');
+const { DefaultAzureCredential } = require('@azure/identity');
+const { SecretClient } = require('@azure/keyvault-secrets');
+
+async function streamToBuffer(readableStream, context) {
+    return new Promise((resolve, reject) => {
+        const chunks = [];
+        readableStream.on('data', (data) => {
+            chunks.push(data instanceof Buffer ? data : Buffer.from(data));
+        });
+        readableStream.on('end', () => {
+            resolve(Buffer.concat(chunks));
+        });
+        readableStream.on('error', (error) => {
+            context.log.error('Error in stream to buffer conversion:', error);
+            reject(error);
+        });
+    });
+}
+
+async function fetchHostStatuses(apiKey, context) {
+    try {
+        const response = await axios.post('https://ic1385.ci.managedwhitelisting.com:3129/v1/agent/find', {"hostname": ""}, {
+            headers: {'X-APIKey': apiKey, 'Content-Type': 'application/json'}
+        });
+        if (response.status === 200) {
+            return response.data.response.agents;
+        } else {
+            context.log.error(`Failed to fetch host statuses with status: ${response.status}`);
+            return [];
+        }
+    } catch (error) {
+        context.log.error(`Error fetching host statuses: ${error}`);
+        throw error;
+    }
+}
+
+async function downloadPreviousHostStatusesFromBlob(blobServiceClient, containerName, blobName, context) {
+    try {
+        const containerClient = blobServiceClient.getContainerClient(containerName);
+        const blobClient = containerClient.getBlobClient(blobName);
+        const downloadBlockBlobResponse = await blobClient.download(0);
+        const blobContents = await streamToBuffer(downloadBlockBlobResponse.readableStreamBody, context);
+        context.log('Previous host statuses downloaded successfully.');
+        return JSON.parse(blobContents.toString()).agents; // Ensuring it directly returns the array
+    } catch (error) {
+        context.log.error('Error downloading previous host statuses from Blob:', error);
+        return [];
+    }
+}
+
+async function uploadDataToBlob(blobServiceClient, containerName, blobName, data, context) {
+    try {
+        const containerClient = blobServiceClient.getContainerClient(containerName);
+        const blobClient = containerClient.getBlockBlobClient(blobName);
+        const dataString = JSON.stringify({agents: data}); // Wrapping the data in an object
+        await blobClient.upload(dataString, dataString.length, {
+            blobHTTPHeaders: { blobContentType: 'application/json' }
+        });
+        context.log('Data uploaded to blob storage successfully.');
+    } catch (error) {
+        context.log.error('Error uploading data to Blob:', error);
+        throw error;
+    }
+}
+
+function getStatusText(statusCode) {
+    const statusText = {'0': 'Offline', '1': 'Online', '3': 'Safemode'};
+    return statusText[statusCode] || 'Unknown';
+}
+
+function getStatusChangeDescription(currentStatus, previousStatus) {
+    if (currentStatus === previousStatus) return 'Same';
+    if (previousStatus === null) return 'New Entry';
+    if (currentStatus === '1') return 'Changed to Online';
+    if (currentStatus === '0') return 'Changed to Offline';
+    return 'Unknown Change';
+}
+
+async function generateExcel(hostsData, previousHostsData, context) {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Host Status Report');
+    worksheet.columns = [
+        { header: 'Username', key: 'username', width: 15 },
+        { header: 'IP', key: 'ip', width: 15 },
+        { header: 'Last Check-In', key: 'lastcheckin', width: 25 },
+        { header: 'OS', key: 'os', width: 25 },
+        { header: 'Policy Version', key: 'policyversion', width: 15 },
+        { header: 'Hostname', key: 'hostname', width: 20 },
+        { header: 'Status', key: 'status', width: 10 },
+        { header: 'Previous Month', key: 'statusChange', width: 20 },
+    ];
+    hostsData.forEach(host => {
+        const previousHost = previousHostsData.find(pHost => pHost.hostname === host.hostname) || {};
+        worksheet.addRow({
+            hostname: host.hostname,
+            ip: host.ip,
+            lastcheckin: host.lastcheckin,
+            os: host.os,
+            policyversion: host.policyversion,
+            status: getStatusText(host.status),
+            username: host.username,
+            statusChange: getStatusChangeDescription(getStatusText(host.status), getStatusText(previousHost.status))
+        });
+    });
+    const excelFilePath = './HostStatusReport.xlsx';
+    await workbook.xlsx.writeFile(excelFilePath);
+    context.log('Excel file generated and saved to:', excelFilePath);
+    return excelFilePath;
+}
+
+async function createAndAttachJiraIssue(excelFilePath, context, JIRA_API_TOKEN, JIRA_EMAIL) {
+    const issueData = {
+        fields: {
+            project: { key: "ICARE" },
+            summary: "Host Status Report",
+            description: {
+                type: "doc",
+                version: 1,
+                content: [{
+                    type: "paragraph",
+                    content: [{ text: "Automated report of host status changes.", type: "text" }]
+                }]
+            },
+            issuetype: { id: "10003" },
+            labels: ["HostStatusUpdate"]
+        }
+    };
+    try {
+        const jiraResponse = await axios.post('https://cso-group.atlassian.net/rest/api/3/issue/', issueData, {
+            headers: {
+                'Authorization': `Basic ${Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64')}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        context.log('JIRA issue created successfully:', jiraResponse.data);
+
+        const issueKey = jiraResponse.data.key;
+        const formData = new FormData();
+        formData.append('file', fs.createReadStream(excelFilePath), {filename: 'HostStatusReport.xlsx'});
+
+        const attachmentResponse = await axios.post(`https://cso-group.atlassian.net/rest/api/3/issue/${issueKey}/attachments`, formData, {
+            headers: {
+                ...formData.getHeaders(),
+                'Authorization': `Basic ${Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString('base64')}`,
+                'X-Atlassian-Token': 'no-check'
+            }
+        });
+        context.log('Excel file attached to JIRA issue successfully');
+    } catch (error) {
+        context.log.error('Error interacting with JIRA:', error);
+    }
+}
+
+module.exports = async function (context) {
+    context.log('Function execution started.');
+    const KVUri = process.env['KEYVAULT_URI'];
+    const credential = new DefaultAzureCredential();
+    const secretClient = new SecretClient(KVUri, credential);
+    const blobServiceClient = BlobServiceClient.fromConnectionString(process.env['AzureWebJobsStorage']);
+    const containerName = 'airlock-host-status';
+    const blobName = 'previous-host-status.json';
+    let API_KEY, JIRA_API_TOKEN, JIRA_EMAIL;
+
+    try {
+        API_KEY = (await secretClient.getSecret('APIKEY1')).value;
+        JIRA_API_TOKEN = (await secretClient.getSecret('JiraApiToken')).value;
+        JIRA_EMAIL = process.env['JIRA_EMAIL'];
+
+        const currentHostStatuses = await fetchHostStatuses(API_KEY, context);
+        const previousHostStatuses = await downloadPreviousHostStatusesFromBlob(blobServiceClient, containerName, blobName, context);
+        const excelFilePath = await generateExcel(currentHostStatuses, previousHostStatuses, context);
+        await uploadDataToBlob(blobServiceClient, containerName, blobName, currentHostStatuses, context);
+
+        await createAndAttachJiraIssue(excelFilePath, context, JIRA_API_TOKEN, JIRA_EMAIL);
+
+        context.log('Function execution finished.');
+    } catch (error) {
+        context.log.error('An error occurred:', error);
+    }
+};
