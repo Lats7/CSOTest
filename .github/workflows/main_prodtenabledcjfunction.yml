@@ -16,21 +16,24 @@ jobs:
       - name: Setup Node Environment
         uses: actions/setup-node@v3
         with:
-          node-version: '18.x' # Ensure this matches the version used in your project
+          node-version: '18.x'
 
       - name: Install Dependencies
         run: |
           cd Tenable/TenableFunction
           npm install
 
-      - name: Build and Test (if applicable)
+      - name: Build Project (if applicable)
         run: |
           cd Tenable/TenableFunction
           npm run build --if-present
-          npm run test --if-present
-        shell: pwsh
 
-      - name: Upload artifact for deployment job
+      - name: Run Tests (if applicable)
+        run: |
+          cd Tenable/TenableFunction
+          npm run test --if-present
+
+      - name: Upload Artifact for Deployment
         uses: actions/upload-artifact@v3
         with:
           name: node-app
@@ -40,7 +43,7 @@ jobs:
     runs-on: windows-latest
     needs: build
     steps:
-      - name: Download artifact from build job
+      - name: Download Artifact from Build Job
         uses: actions/download-artifact@v3
         with:
           name: node-app
@@ -55,4 +58,4 @@ jobs:
         with:
           app-name: 'ProdTenableDCJFunction'
           slot-name: 'Production'
-          package: . # Assuming the current working directory is correct after artifact download
+          package: . # Assumes the working directory contains your function app
