@@ -25,24 +25,25 @@ jobs:
       - name: List directory contents
         run: |
           pwd
-          ls -la
-          echo "Listing Tenable directory contents..."
-          ls -la Tenable/
-
+          Get-ChildItem | Format-Table
+          Write-Output "Listing Tenable directory contents..."
+          Get-ChildItem -Path Tenable | Format-Table
+        shell: pwsh
 
       - name: 'Resolve Project Dependencies Using Npm'
-        shell: pwsh
         run: |
-          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }} # Changed from pushd to cd for simplicity
+          cd ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
           npm install
           npm run build --if-present
           npm run test --if-present
+        shell: pwsh
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v3
         with:
           name: node-app
-          path: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }} # Specify the path to upload
+          path: ${{ env.AZURE_FUNCTIONAPP_PACKAGE_PATH }}
+
 
   deploy:
     runs-on: windows-latest
