@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Path Whitelist Management</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Path Whitelist Management</h1>
+        <div id="menu">
+            <button onclick="showList('windows')">Windows</button>
+            <button onclick="showList('mac')">Mac</button>
+            <button onclick="showList('linux')">Linux</button>
+        </div>
+
+        <div id="lists">
+            <!-- Windows Paths -->
+            <div id="windows" class="list">
+                <h2>Windows Paths</h2>
+                <ul>
+                    <!-- Paths will be added here -->
+                </ul>
+            </div>
+            
+            <!-- Mac Paths -->
+            <div id="mac" class="list" style="display:none;">
+                <h2>Mac Paths</h2>
+                <ul>
+                    <!-- Paths will be added here -->
+                </ul>
+            </div>
+            
+            <!-- Linux Paths -->
+            <div id="linux" class="list" style="display:none;">
+                <h2>Linux Paths</h2>
+                <ul>
+                    <!-- Paths will be added here -->
+                </ul>
+            </div>
+        </div>
+
+        <div id="addPathForm">
+            <h2>Add a New Path</h2>
+            <form onsubmit="addPath(); return false;">
+                <input type="text" id="newPath" required placeholder="Add a path to the list"/>
+                <select id="osSelect">
+                    <option value="windows">Windows</option>
+                    <option value="mac">Mac</option>
+                    <option value="linux">Linux</option>
+                </select>
+                <button type="submit">Add Path</button>
+            </form>
+        </div>
+
+        <!-- Delete button added here -->
+        <button id="deletePaths" onclick="deleteSelectedPaths()">Delete Selected Paths</button>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
