@@ -1,0 +1,39 @@
+/* Apply a flex layout to the entire body with center alignment */
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh; /* Make the body take up the full viewport height */
+    margin: 0; /* Remove default margin */
+    font-family: Arial, sans-serif;
+}
+
+/* Style adjustments for the main content container (if you decide to wrap your content) */
+.container {
+    text-align: center; /* Center text for child elements */
+    /* Add any padding or styling here */
+}
+
+#menu button {
+    margin-right: 10px;
+    cursor: pointer; /* Change cursor to pointer to indicate clickable buttons */
+}
+
+.list {
+    margin-top: 20px;
+}
+
+#addPathForm {
+    margin-top: 30px;
+}
+
+#addPathForm form > * {
+    margin: 10px; /* Add some spacing around form elements */
+}
+
+/* You might need to adjust widths and padding for smaller screens */
+@media (max-width: 600px) {
+    .container {
+        width: 90%; /* Adjust width for small screens */
+    }
+}
