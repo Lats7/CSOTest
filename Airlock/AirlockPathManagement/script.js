@@ -20,33 +20,38 @@ function addPath() {
 }
 
 function savePath(path, os) {
-    const paths = JSON.parse(localStorage.getItem('paths')) || {};
-    if (!paths[os]) paths[os] = [];
-    if (!paths[os].includes(path)) { // Avoid duplicate paths
-        paths[os].push(path);
-        localStorage.setItem('paths', JSON.stringify(paths)); // Update localStorage
-        updateUI(); // Refresh the displayed list
-    }
+    fetch('https://<your-function-app-name>.azurewebsites.net/api/addPath', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path, os: os })
+    })
+    .then(response => response.json())
+    .then(data => {
+        console.log('Path added:', data);
+        loadSavedPaths(); // Refresh the displayed list after adding
+    })
+    .catch(error => console.error('Failed to add path:', error));
 }
 
 function loadSavedPaths() {
-    updateUI();
+    fetch('https://<your-function-app-name>.azurewebsites.net/api/getPaths')
+    .then(response => response.json())
+    .then(data => updateUI(data))
+    .catch(error => console.error('Failed to load paths:', error));
 }
 
-function updateUI() {
-    const paths = JSON.parse(localStorage.getItem('paths')) || {};
+function updateUI(paths) {
     document.querySelectorAll('.list ul').forEach(ul => ul.innerHTML = ''); // Clear existing lists
-    
+
     Object.keys(paths).forEach(os => {
         const list = document.getElementById(os).querySelector('ul');
-        paths[os].forEach((path, index) => {
+        paths[os].forEach(path => {
             const li = document.createElement('li');
-
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.className = 'path-checkbox';
             checkbox.dataset.os = os;
-            checkbox.dataset.index = index;
+            checkbox.dataset.path = path;
 
             const textNode = document.createTextNode(` ${path}`);
             li.appendChild(checkbox);
@@ -57,19 +62,19 @@ function updateUI() {
 }
 
 function deleteSelectedPaths() {
-    const paths = JSON.parse(localStorage.getItem('paths')) || {};
-    document.querySelectorAll('.path-checkbox:checked').forEach(checkbox => {
+    const checkboxes = document.querySelectorAll('.path-checkbox:checked');
+    checkboxes.forEach(checkbox => {
         const os = checkbox.dataset.os;
-        const index = parseInt(checkbox.dataset.index, 10);
-        paths[os].splice(index, 1); // Remove the path based on index
-    });
+        const path = checkbox.dataset.path;
 
-    // Clean up any empty arrays
-    Object.keys(paths).forEach(os => {
-        if (!paths[os].length) delete paths[os];
+        fetch('https://<your-function-app-name>.azurewebsites.net/api/deletePath', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ os: os, path: path })
+        })
+        .then(() => {
+            loadSavedPaths(); // Refresh the displayed list after deletion
+        })
+        .catch(error => console.error('Failed to delete path:', error));
     });
-
-    localStorage.setItem('paths', JSON.stringify(paths)); // Update localStorage
-    updateUI(); // Refresh the displayed list
 }
-
