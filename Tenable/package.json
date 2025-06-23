@@ -2,7 +2,7 @@
   "name": "azure-function-project",
   "version": "1.0.0",
   "description": "A minimal Azure Function Node.js project for deleting assets.",
-  "main": "index.js",
+  "main": "TenableFunction/index.js",
   "scripts": {
     "start": "func start",
     "test": "echo \"No tests specified.\" && exit 0"
