@@ -1,1 +1,1 @@
-Testing Github Pulls/Clones/Pushes
+Testing GitHub Pulls/Clones/Pushes.
